@@ -6,23 +6,18 @@
 #include <random>
 #include <cstdio>
 #include <ctime>
-#include <list>
+#include <stdlib.h>
+#include <sstream>
 
 class LPsolver
 {
     public:
-        int n,m,status;
-        double delta,logPa;
-        long double ynorm;
-        long double logynorm;
-        Eigen::VectorXd x,y,ATy;
-        Eigen::MatrixXd A,ATA; //let the columns of A be normalized
+        int n,m,t,T,status;
+        Eigen::VectorXd x,xlast,y,ylast,y_,ATy;
+        Eigen::MatrixXd A,Pa; //let the columns of A be normalized
         Eigen::MatrixXd Aori;
-        std::vector<long double> Anorms; // let this hold the real norms of A
-        std::vector<long double> logAnorms;
-        bool big;
-
-        std::list<Eigen::VectorXd> dirs;
+        bool step;
+        double eps;
 
     LPsolver(Eigen::MatrixXd A)
     {
@@ -30,230 +25,154 @@ class LPsolver
         this->A=A;
         Aori=A;
         m=A.rows(); n=A.cols();
-        Anorms.resize(n);
-        logAnorms.resize(n);
-        for(int i=0;i<n;i++){Anorms[i]=A.col(i).norm();}
-        for(int i=0;i<n;i++){logAnorms[i]=log(A.col(i).norm());}
-        x.resize(n);
-        x.setOnes();
-        logPa=findPa();
-        delta=finddelta();
-        y=A*x;
-        ynorm=y.norm();
-        logynorm=log(y.norm());
-        y.normalize();
-        for(int i=0;i<n;i++){(this->A).col(i).normalize();}
-        ATA=(this->A).transpose()*(this->A);
-        ATy.resize(n);
-        //for(int i=0;i<n;i++){ATy(i)=A.col(i).dot(y);}
-        ATy=(this->A).transpose()*y;
-        big=false;
+        y.setConstant(n,1.0/n);
+        //for(i=0;i<n;i++){y(i)=1/n;}
+        y_=y;
+        T=findT();
+        Pa=Eigen::MatrixXd::Identity(n,n)-A.transpose()*(A*A.transpose()).inverse()*A;
+        x=Pa*y;
+        eps=pow(10.0,-10);
     }
 
-    void solve()
+    int BP()
     {
-        int t=0;
-        int iter=0;
-
-        while(logynorm>=log(delta) && logPa<=0)
+        step=false;
+        while(maxy() < 2.0*eTx())
         {
-            iter++;
-            if(!big){
-                for(int i=0;i<n;i++)
-                {
-                    if (Anorms[i]>pow(10,150))
-                    {
-                        big=true;
-                    }
-                }
-            }
-            double mi=0;
+            //std::cout << x.norm() << std::endl;
             int k=0;
             for(int i=0;i<n;i++)
             {
-                if(ATy(i)<mi)
-                {
-                    mi=ATy(i);
-                    k=i;
-                }
+                if(x(i)<x(k)){k=i;}
             }
-            if(mi==0)
-            {
-                status=-1;
+            if(x(k)>0){return 0;}
+            double alpha=(Pa.col(k).transpose()).dot(Pa.col(k)-x)/((Pa.col(k)-x).squaredNorm());
+            ylast=y; xlast=x;
+            y=alpha*y+(1-alpha)*Eigen::VectorXd::Unit(n,k);
+            x=alpha*x+(1-alpha)*Pa.col(k);
+            step=true;
 
-                Eigen::VectorXd Ty=y;
-                for(auto v : dirs){Ty=(Eigen::MatrixXd::Identity(m,m)+v*v.transpose())*Ty; Ty.normalize();}
-                double mi2=100;
-                for(int i=0;i<m;i++)
-                {
-                    if(((Aori.transpose()*Ty).transpose())(i)<mi2){mi2=((Aori.transpose()*Ty).transpose())(i);}
-                }
-                std::cout << "dualis megoldas pontossaga: " << mi2 << std::endl;
-                std::cout << "status: -1 " << "iter: " << iter << " rescale: " << t << " big: " << big << std::endl;
-                return;
-            }
-
-            if(mi<-1.0/(11*m))
-            {
-                if(!big){
-                    x=x-(mi*(ynorm/Anorms[k]))*Eigen::VectorXd::Unit(n,k);
-                } else {
-                    x=x-(mi*exp(logynorm-logAnorms[k]))*Eigen::VectorXd::Unit(n,k);
-                }
-
-                Eigen::VectorXd y_=y-mi*A.col(k);
-                double len=y_.norm();
-                ynorm*=len;
-                logynorm+=log(len);
-                y=y_.normalized();
-                ATy=(ATy-mi*ATA.col(k))/len;
-            }
-            else
-            {
-                t++;
-                A=(A+y*ATy.transpose());
-                ynorm*=2;
-                logynorm+=log(2);
-                std::vector<double> norms(n);
-                for(int i=0;i<n;i++){norms[i]=A.col(i).norm();}
-                for(int i=0;i<n;i++){Anorms[i]*=norms[i];}
-                for(int i=0;i<n;i++){logAnorms[i]+=log(norms[i]);}
-
-                ATA=(ATA+3*ATy*ATy.transpose());
-                for(int i=0;i<n;i++)
-                {
-                    for(int j=0;j<n;j++)
-                    {
-                        ATA(i,j)=ATA(i,j)/(norms[i]*norms[j]);
-                    }
-                }
-                for(int i=0;i<n;i++){A.col(i).normalize();}
-
-                ATy=2*ATy;
-                for(int i=0;i<n;i++)
-                {
-                    ATy(i)=ATy(i)/norms[i];
-                }
-                //pontosítás
-                if(t%(m*n)==0){
-                    ATA=A.transpose()*A;
-                    ATy=A.transpose()*y;
-                    if(!big){
-                        y.setZero();
-                        for(int i=0;i<n;i++){y+=A.col(i)*Anorms[i]*x(i);}
-                        ynorm=y.norm();
-                        logynorm=log(ynorm);
-                        y.normalize();
-                    }
-                }
-                logPa+=log(3.0/2.0) ;
-
-                dirs.push_front(y);
-                //suggestion: keep Ty and check if A.transpose()*Ty > -e where e is tiny
-            }
+            if(x.norm()<eps){return 1;}
         }
-        if(logynorm<log(delta))
-        {
-            status=1;
-            for(int i=0;i<n;i++)
-            {
-                if(!big)
-                {
-                    A.col(i)*=Anorms[i];
-                } else {
-                    A.col(i)*=exp(logAnorms[i]);
-                }
-            }
-            y*=ynorm;
-            x=x-A.transpose()*(A*A.transpose()).inverse()*y;
-            std::cout << "megoldas pontossaga: " << (Aori*x).norm() << std::endl;
-            for(int i=0;i<n;i++)
-            {
-                if(x(i) < 0){std::cout << "negativ koordinata!!";}
-            }
-        }
-        else
-        {
-            status=-2;
-            //std::cout << y.transpose()*A <<std::endl;
-            Eigen::VectorXd Ty=y;
-            for(auto v : dirs){Ty=(Eigen::MatrixXd::Identity(m,m)+v*v.transpose())*Ty; Ty.normalize();}
-            double mi2=100;
-            for(int i=0;i<m;i++)
-            {
-                if(((Aori.transpose()*Ty).transpose())(i)<mi2){mi2=((Aori.transpose()*Ty).transpose())(i);}
-            }
-            std::cout << "dualis megoldas pontossaga: " << mi2 << std::endl;
-        }
-        std::cout << "status: " << status << " iter: " << iter << " rescale: " << t << " big: " << big << std::endl;
+        return 2;
     }
-
-    double findPa()
+    int solve()
     {
-        std::vector<double> l(n);
-        for(int i=0;i<n;i++){l[i]=A.col(i).norm();}
-        std::sort(l.begin(), l.end(), std::greater<int>());
-        double logPa=log(pow(m,1.5));
-        for(int i=0;i<m;i++)
-        {
-            logPa+=l[i];
-        }
-        logPa+=l[0];
-        return -m*logPa;
-    }
-
-    double finddelta()
-    {
-        Eigen::MatrixXd invAAT=(A*A.transpose()).inverse();
-        double mi=0;
+        t=0;
+        int scale=0;
+        std::vector<double> divs1(n),divs2(n);
         for(int i=0;i<n;i++)
         {
-            if((invAAT*A.col(i)).norm()>mi)
+            divs1[i]=1.0;
+            divs2[i]=1.0;
+        }
+        int st;
+        while(t<T)
+        {
+            t++;
+            st=BP();
+            if(st==0){
+                Eigen::VectorXd xout=x;
+                for(int i=0;i<n;i++)
+                {
+                    xout[i]*=divs1[i];
+                }
+                //return xout;
+                std::cout << "primal" << std::endl;
+                std::cout << (A*x).norm() << " scale " << scale << std::endl;
+                return 1;
+            }
+            if(st==1)
             {
-                mi=(invAAT*A.col(i)).norm();
+                Eigen::VectorXd zout=(A*A.transpose()).inverse()*A*y;
+                //return yout;
+                std::cout << "dual" << std::endl;
+                std::cout << scale << std::endl;
+                std::cout << zout.transpose()*Aori << std::endl;
+                return -1;
+            }
+            if(st==2)
+            {
+                int k=0;
+                for(int i=0;i<n;i++)
+                {
+                    if(y(i)>y(k)){k=i;}
+                }
+                A.col(k)=A.col(k)/2.0;
+                Pa=Eigen::MatrixXd::Identity(n,n)-A.transpose()*(A*A.transpose()).inverse()*A;
+                divs1[k]=divs1[k]/2.0;
+                if(step)
+                {
+                    y_=ylast;
+                    for(int i=0;i<n;i++){divs2[i]=1;}
+                    //std::cout << "lep: " << x.norm() << std::endl;
+                } else {
+                    //std::cout << "nemlep: " << x.norm() << std::endl;
+                }
+                divs2[k]=divs2[k]/2;
+                for(int i=0;i<n;i++){y(i)=y_(i)*divs2[i];}
+                Eigen::VectorXd e;
+                e.setOnes(n);
+                y=y/e.dot(y);
+                x=Pa*y;
+                scale++;
             }
         }
-        return 1/mi;
+        std::cout << scale << std::endl;
+        return -2;
     }
+
+    double findT()
+    {
+        double Lmin=1;
+        for(int i=0;i<n;i++){Lmin*=A.col(i).norm();}
+
+        return n*log2(Lmin);
+    }
+
+    double eTx()
+    {
+        double d=0;
+        for(int i=0;i<n;i++){d+=std::max(0.0,x(i));}
+        return d;
+    }
+    double maxy()
+    {
+        double ma=0;
+        for(int i=0;i<n;i++)
+        {
+            if(y(i)>ma){ma=y(i);}
+        }
+        return ma;
+    }
+
 };
 
-void runner(int n, int m)
+void solvable(Eigen::MatrixXd &A)
 {
-    for(int k=1;k<10;k++)
-    {
-        std::cout << k << std::endl << std::endl ;
-        std::default_random_engine generator(k);
-        std::uniform_int_distribution<int> distribution(-100,100);
-        distribution(generator);
-        Eigen::MatrixXd A(m,n);
-        for(int i=0;i<m;i++)
-        {
-            for(int j=0;j<n;j++)
-            {
-                A(i,j)=distribution(generator);
-            }
-        }
-        if((A*A.transpose()).determinant()==0){std::cout << "dependent rows" << std::endl;}
-        std::clock_t start;
-        start = std::clock();
-        LPsolver L(A);
-        L.solve();
-        std::cout << ( std::clock() - start ) / (double) CLOCKS_PER_SEC << std::endl << std::endl;
-    }
+    Eigen::VectorXd x(A.cols());
+    for(int i=0;i<A.cols();i++){x(i)=1.0/(i+1);}
+    Eigen::VectorXd y=A*x;
+    A.conservativeResize(A.rows(), A.cols()+1);
+    A.col(A.cols()-1) = -y;
 }
 
-void runner2(int num)
+void runner()
 {
+
+    FILE *fp2;
+    fp2=fopen("times.txt","w");
+    FILE* fp;
+    fp = fopen("out.txt","r");
+    int num;
+    fscanf(fp,"%d",&num);
     for(int k=1;k<=num;k++)
     {
-        FILE* fp;
-        std::stringstream ss;
-        ss << k;
-        std::string fname = "lp" + ss.str() + ".txt";
-        fp = fopen(fname.c_str(),"r");
         int n,m;
         fscanf(fp,"%d %d",&m,&n);
-        std::cout << k << std::endl << std::endl ;
+        fprintf(fp2,"%d\n",k);
+        fprintf(fp2,"%d %d\n",m,n);
+        std::cout << k << std::endl;
         Eigen::MatrixXd A(m,n);
         for(int i=0;i<m;i++)
         {
@@ -264,18 +183,47 @@ void runner2(int num)
                 A(i,j)=in;
             }
         }
-        fclose(fp);
         if((A*A.transpose()).determinant()==0){std::cout << "dependent rows" << std::endl;}
         std::clock_t start;
         start = std::clock();
+        solvable(A);
         LPsolver L(A);
-        L.solve();
+        int stat=L.solve();
         std::cout << ( std::clock() - start ) / (double) CLOCKS_PER_SEC << std::endl << std::endl;
+        fprintf(fp2,"%d ",stat);
+        fprintf(fp2,"%f\n",( std::clock() - start ) / (double) CLOCKS_PER_SEC);
     }
+    fclose(fp);
+    fclose(fp2);
+}
+
+void writer(int m, int n, int mi, int ma, int num)
+{
+    FILE* fp;
+    fp = fopen("out.txt","w");
+    fprintf(fp,"%d\n",num);
+    for(int k=1;k<=num;k++)
+    {
+        std::default_random_engine generator(k);
+        std::uniform_int_distribution<int> distribution(mi,ma);
+        distribution(generator);
+        fprintf(fp,"%d %d\n",m,n);
+        for(int i=0;i<m;i++)
+        {
+            for(int j=0;j<n;j++)
+            {
+                fprintf(fp,"%d ",distribution(generator));
+            }
+            fprintf(fp,"\n");
+        }
+    }
+    fclose(fp);
 }
 
 int main()
 {
-    runner(10,5);
+
+    writer(5,10,-100,100,10);
+    runner();
 }
 
