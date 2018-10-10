@@ -50,6 +50,9 @@ class LPsolver
         {
             oricol(i)=i;
         }
+
+        //std::cout<<A<<std::endl;
+
     }
 
     int BP()
@@ -64,18 +67,28 @@ class LPsolver
                 if(x(i)<x(k)){k=i;}
             }
             if(x(k)>0){return 0;}
-            std::cout <<  std::endl << x(k) << std::endl;
+            //std::cout <<  std::endl << x(k) << std::endl;
             double alpha=(Pa.col(k).transpose()).dot(Pa.col(k)-x)/((Pa.col(k)-x).squaredNorm());
             ylast=y; xlast=x;
+            alpha=std::min(alpha,1.0); //unnecessary
             y=alpha*y+(1-alpha)*Eigen::VectorXd::Unit(A.cols(),k);
             x=alpha*x+(1-alpha)*Pa.col(k);
             step=true;
 
-            std::cout << maxy() << " " << eTx() << std::endl;
+            /*std::cout << maxy() << " " << eTx() << std::endl;
             std::cout << y.lpNorm<1>() << " " << x.norm() << std::endl;
             std::cout << x.dot(Pa.col(k)-xlast) << std::endl;
-            std::cout << (Pa.col(k)-x).normalized().dot((Pa.col(k)-xlast).normalized()) << std::endl;
-            //if (alpha>1) {std::cout << "!!"; int i=1/(k-k);}
+            std::cout << (Pa.col(k)-x).normalized().dot((Pa.col(k)-xlast).normalized()) << std::endl;*/
+            if (alpha>=1)
+            {
+                Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A;
+                x=Pa*y;
+                std::cout << std::endl << Pa*x-x << std::endl << std::endl; //should be zero
+                std::cout << Pa.col(k).dot(x) << std::endl;
+                std::cout << x(k) << std::endl;
+                std::cout << (Pa.col(k)-x).dot(x) << std::endl;
+                exit(-1);
+            }
 
             //if(x.norm()<inaccuracy){return 1;}
         }
@@ -155,7 +168,7 @@ class LPsolver
 
                     oricol.segment(k,A.cols()-2)=oricol.segment(k+1,A.cols()-1);
                 }
-                std::cout << A.cols();
+
             }
         }
         std::cout << scale << std::endl;
@@ -280,7 +293,7 @@ void runner()
         start = std::clock();
         LPsolver L(A,b,0);
          bool done=false;
-        L.solve(false,done);
+        //L.solve(false,done);
         Eigen::MatrixXd dA;
         Eigen::VectorXd db;
 
