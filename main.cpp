@@ -15,7 +15,7 @@ class LPsolver
 {
     public:
         int t,T,status;
-        Eigen::VectorXd x,xlast,y,ylast,y_,ATy,b,oricol;
+        Eigen::VectorXd x,xlast,y,ylast,y_,ATy,b,oricol,divs,numdivs;
         Eigen::MatrixXd A,Pa; //let the columns of A be normalized
         Eigen::MatrixXd Aori;
         bool step;
@@ -50,6 +50,13 @@ class LPsolver
         {
             oricol(i)=i;
         }
+        divs.resize(A.cols());
+        numdivs.resize(A.cols());
+        for(int i=0;i<A.cols();i++)
+        {
+            divs[i]=1.0;
+            numdivs[i]=0;
+        }
 
         //std::cout<<A<<std::endl;
 
@@ -75,15 +82,10 @@ class LPsolver
             x=alpha*x+(1-alpha)*Pa.col(k);
             step=true;
 
-            /*std::cout << maxy() << " " << eTx() << std::endl;
-            std::cout << y.lpNorm<1>() << " " << x.norm() << std::endl;
-            std::cout << x.dot(Pa.col(k)-xlast) << std::endl;
-            std::cout << (Pa.col(k)-x).normalized().dot((Pa.col(k)-xlast).normalized()) << std::endl;*/
             if (alpha>=1)
             {
-                Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A;
-                x=Pa*y;
-                std::cout << std::endl << Pa*x-x << std::endl << std::endl; //should be zero
+                //x=Pa*y ;
+                std::cout << std::endl << std::endl << (Pa*x-x).norm() << std::endl; //should be zero
                 std::cout << Pa.col(k).dot(x) << std::endl;
                 std::cout << x(k) << std::endl;
                 std::cout << (Pa.col(k)-x).dot(x) << std::endl;
@@ -97,28 +99,30 @@ class LPsolver
     int solve(bool paralel, bool &done)
     {
         int scale=0;
-        std::vector<double> divs1(A.cols()),divs2(A.cols());
-        std::vector<int> numdivs(A.cols());
-        for(int i=0;i<A.cols();i++)
-        {
-            divs1[i]=1.0;
-            divs2[i]=1.0;
-            numdivs[i]=0;
-        }
+
         int st;
         while((paralel && !done) || (!paralel && A.cols()>0))
         {
             st=BP();
             if(st==0){
-                Eigen::VectorXd xout=x;
+                Eigen::VectorXd xout;
+                xout.setZero(Aori.cols());
+                if(oricol(A.cols()-1)==Aori.cols())
+                {
+                    for(int i=0;i<A.cols()-1;i++)
+                    {
+                        xout[oricol(i)]=(x(i)*divs[i])/(x(A.cols()-1)*divs[A.cols()-1]);
+                    }
+                    //return xout;
+                    std::cout << "primal" << std::endl;
+                    std::cout << (Aori*xout-b).norm() << ".." << (A*x).norm() << " scale " << scale << std::endl;
+                    int k=0;
                 for(int i=0;i<A.cols();i++)
                 {
-                    xout[i]*=divs1[i];
+                    if(x(i)<x(k)){k=i;}
                 }
-                //return xout;
-                std::cout << "primal" << std::endl;
-                std::cout << A << std::endl << x << std::endl ;
-                std::cout << (A*x).norm() << " scale " << scale << std::endl;
+                std::cout << x(k) << std::endl;
+                }
                 done=true;
                 return 1;
             }
@@ -139,8 +143,8 @@ class LPsolver
                     if(y(i)>y(k)){k=i;}
                 }
                 A.col(k)=A.col(k)/2.0;
-                Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A;
-                divs1[k]=divs1[k]/2.0;
+                Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A; //optimize
+                divs[k]=divs[k]/2.0;
                 numdivs[k]++;
                 if(step)
                 {
@@ -150,23 +154,34 @@ class LPsolver
                     //std::cout << "nemlep: " << x.norm() << std::endl;
                 }
                 y_(k)=y_(k)/2;
-                Eigen::VectorXd e;
-                e.setOnes(A.cols());
+                Eigen::VectorXd e; e.setOnes(A.cols());
                 y=y_/e.dot(y_);
                 x=Pa*y;
                 scale++;
 
                 if(numdivs[k]>t)
                 {
+                    std::cout << "!!\n";
+                    int n=A.cols();
                     A.block(0,k,A.rows(),A.cols()-1-k) = A.rightCols(A.cols()-1-k);
                     A.conservativeResize(A.rows(),A.cols()-1);
                     Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A;
-                    y.segment(k,A.cols()-2)=y.segment(k+1,A.cols()-1);
+                    y.segment(k,n-k-1)=y.tail(n-k-1);
+                    y.conservativeResize(n-1);
+
                     Eigen::VectorXd e; e.setOnes(A.cols());
                     y=y/(e.dot(y));
                     x=Pa*y;
+                    y_=y;
 
-                    oricol.segment(k,A.cols()-2)=oricol.segment(k+1,A.cols()-1);
+                    oricol.segment(k,n-k-1)=oricol.tail(n-k-1);
+                    oricol.conservativeResize(n-1);
+
+                    divs.segment(k,n-k-1)=oricol.tail(n-k-1);
+                    divs.conservativeResize(n-1);
+
+                    numdivs.segment(k,n-k-1)=oricol.tail(n-k-1);
+                    numdivs.conservativeResize(n-1);
                 }
 
             }
@@ -267,7 +282,7 @@ void runner()
     fp = fopen("out.txt","r");
     int num;
     fscanf(fp,"%d",&num);
-    for(int k=1;k<=1;k++)
+    for(int k=1;k<=10;k++)
     {
         int n,m;
         fscanf(fp,"%d %d",&m,&n);
@@ -292,21 +307,18 @@ void runner()
         std::clock_t start;
         start = std::clock();
         LPsolver L(A,b,0);
-         bool done=false;
-        //L.solve(false,done);
+
         Eigen::MatrixXd dA;
         Eigen::VectorXd db;
 
-        dual(A,b,dA,db);
-        //std::cout << dA.rows() << std::endl << dA.cols() <<std::endl << db.rows() << std::endl << db.cols() << std::endl;
-        LPsolver L2(dA,db,0);
+        //dual(A,b,dA,db);
+        //LPsolver L2(dA,db,0);
 
-
-
-
+        bool done=false;
+L.solve(false,done);
         //std::thread first (&LPsolver::solve,&L,true,std::ref(done));
-done=false;
-        L2.solve(false,done);
+//done=false;
+        //L2.solve(false,done);
 
         //first.join();
 
@@ -342,10 +354,52 @@ void writer(int m, int n, int mi, int ma, int num)
     fclose(fp);
 }
 
+void writer2(int m, int n, int mi, int ma, int num) //non max support solution
+{
+    FILE* fp;
+    fp = fopen("out2.txt","w");
+    fprintf(fp,"%d\n",num);
+    for(int k=1;k<=num;k++)
+    {
+        std::default_random_engine generator(k);
+        std::uniform_int_distribution<int> distribution(mi,ma);
+        distribution(generator);
+        Eigen::MatrixXd A(m,n);
+        fprintf(fp,"%d %d\n",m,n);
+        for(int i=0;i<m-1;i++)
+        {
+            for(int j=0;j<n;j++)
+            {
+                A(i,j)=distribution(generator);
+            }
+        }
+        for(int j=0;j<n;j++)
+        {
+            A(m-1,j)=0;
+        }
+        Eigen::VectorXd e; e.setConstant(m,1);
+        for(int j=0;j<n;j++)
+        {
+            A(m-1,j)=-e.dot(A.col(j));
+        }
+        A.col(n-1)=-A.col(n-1);
+        for(int i=0;i<m;i++)
+        {
+            for(int j=0;j<n;j++)
+            {
+                int k=A(i,j); //dont know why this is necessary
+                fprintf(fp,"%d ",k); //A(i,j) here wrote zeros
+            }
+            fprintf(fp,"\n");
+        }
+    }
+    fclose(fp);
+}
+
 int main()
 {
 
-    writer(5,10,-100,100,10);
+    //writer2(5,10,-100,100,10);
     runner();
 }
 
