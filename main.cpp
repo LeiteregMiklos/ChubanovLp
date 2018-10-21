@@ -37,12 +37,15 @@ class LPsolver
         A.conservativeResize(A.rows(), A.cols()+1);
         A.col(A.cols()-1) = -b;
         this->A=A;
+        removeDependentRows();
+        A=this->A;
 
         //initialize the algortihm
         y.setConstant(A.cols(),1.0/A.cols());
         y_=y;
         t=findt();
-        Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A;
+        //Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A;
+        Pa=findPa();
         x=Pa*y;
         //inaccuracy=pow(10.0,-10);
         oricol.resize(A.cols());
@@ -60,6 +63,17 @@ class LPsolver
 
         //std::cout<<A<<std::endl;
 
+    }
+
+    Eigen::MatrixXd findPa()
+    {
+        Eigen::MatrixXd P=Eigen::MatrixXd::Identity(A.cols(),A.cols());
+        Eigen::FullPivLU<Eigen::MatrixXd> dec(A*A.transpose());
+        for(int i=0;i<A.cols();i++)
+        {
+            P.col(i)=P.col(i)-A.transpose()*dec.solve(A*Eigen::VectorXd::Unit(A.cols(),i));
+        }
+        return P;
     }
 
     int BP()
@@ -89,6 +103,7 @@ class LPsolver
                 std::cout << Pa.col(k).dot(x) << std::endl;
                 std::cout << x(k) << std::endl;
                 std::cout << (Pa.col(k)-x).dot(x) << std::endl;
+                std::cout << (A*x).norm() << std::endl;
                 exit(-1);
             }
 
@@ -117,11 +132,11 @@ class LPsolver
                     std::cout << "primal" << std::endl;
                     std::cout << (Aori*xout-b).norm() << ".." << (A*x).norm() << " scale " << scale << std::endl;
                     int k=0;
-                for(int i=0;i<A.cols();i++)
-                {
-                    if(x(i)<x(k)){k=i;}
-                }
-                std::cout << x(k) << std::endl;
+                    for(int i=0;i<A.cols();i++)
+                    {
+                        if(x(i)<x(k)){k=i;}
+                    }
+                    std::cout << x(k) << std::endl;
                 }
                 done=true;
                 return 1;
@@ -143,7 +158,8 @@ class LPsolver
                     if(y(i)>y(k)){k=i;}
                 }
                 A.col(k)=A.col(k)/2.0;
-                Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A; //optimize
+                //Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A; //optimize
+                Pa=findPa();
                 divs[k]=divs[k]/2.0;
                 numdivs[k]++;
                 if(step)
@@ -165,7 +181,9 @@ class LPsolver
                     int n=A.cols();
                     A.block(0,k,A.rows(),A.cols()-1-k) = A.rightCols(A.cols()-1-k);
                     A.conservativeResize(A.rows(),A.cols()-1);
-                    Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A;
+                    removeDependentRows();
+                    //Pa=Eigen::MatrixXd::Identity(A.cols(),A.cols())-A.transpose()*(A*A.transpose()).inverse()*A;
+                    Pa=findPa();
                     y.segment(k,n-k-1)=y.tail(n-k-1);
                     y.conservativeResize(n-1);
 
@@ -189,6 +207,17 @@ class LPsolver
         std::cout << scale << std::endl;
         done=true;
         return -2;
+    }
+
+    void removeDependentRows()
+    {
+        Eigen::MatrixXd At=A.transpose();
+        Eigen::MatrixXd Im=At.fullPivLu().image(At);
+
+        if (Im.cols()<At.cols())
+        {
+            A=Im.transpose();
+        }
     }
 
     double findt()
@@ -303,22 +332,24 @@ void runner()
             fscanf(fp,"%d",&in);
             b(i)=in;
         }
-        if((A*A.transpose()).determinant()==0){std::cout << "dependent rows" << std::endl;}
         std::clock_t start;
         start = std::clock();
-        LPsolver L(A,b,0);
 
         Eigen::MatrixXd dA;
         Eigen::VectorXd db;
 
-        //dual(A,b,dA,db);
-        //LPsolver L2(dA,db,0);
+        dual(A,b,dA,db);
+
+        LPsolver L(A,b,0);
+        LPsolver L2(dA,db,0);
 
         bool done=false;
+        std::cout << "first" << std::endl;
 L.solve(false,done);
         //std::thread first (&LPsolver::solve,&L,true,std::ref(done));
-//done=false;
-        //L2.solve(false,done);
+        std::cout << "second" << std::endl;
+done=false;
+        L2.solve(false,done);
 
         //first.join();
 
@@ -366,7 +397,7 @@ void writer2(int m, int n, int mi, int ma, int num) //non max support solution
         distribution(generator);
         Eigen::MatrixXd A(m,n);
         fprintf(fp,"%d %d\n",m,n);
-        for(int i=0;i<m-1;i++)
+        for(int i=0;i<m;i++)
         {
             for(int j=0;j<n;j++)
             {
@@ -375,14 +406,14 @@ void writer2(int m, int n, int mi, int ma, int num) //non max support solution
         }
         for(int j=0;j<n;j++)
         {
-            A(m-1,j)=0;
+            A(j%m,j)=0;
         }
         Eigen::VectorXd e; e.setConstant(m,1);
         for(int j=0;j<n;j++)
         {
-            A(m-1,j)=-e.dot(A.col(j));
+            A(j%m,j)=-e.dot(A.col(j));
         }
-        A.col(n-1)=-A.col(n-1);
+        A.col(n-1)=A.col(n-1);//+e;
         for(int i=0;i<m;i++)
         {
             for(int j=0;j<n;j++)
